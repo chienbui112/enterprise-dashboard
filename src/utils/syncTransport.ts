@@ -46,14 +46,20 @@ export const createRemoteTransport = (): SyncTransport => {
   let ws: WebSocket | null = null;
   let closed = false;
   let retry = 0;
+  let connectedOnce = false;
 
   const connect = () => {
     if (closed) return;
     const proto = location.protocol === "https:" ? "wss" : "ws";
     ws = new WebSocket(`${proto}://${location.host}/ws`);
     ws.onopen = () => {
+      const isReconnect = connectedOnce;
+      connectedOnce = true;
       retry = 0;
       statusCbs.forEach((c) => c(true));
+      // Vừa NỐI LẠI (không phải lần đầu) -> pull ngay để bắt kịp thay đổi đã lỡ lúc mất kết nối.
+      // (Lần đầu không cần: transport effect bên index.tsx đã pull lúc dựng.)
+      if (isReconnect) changeCbs.forEach((c) => c());
     };
     ws.onmessage = () => changeCbs.forEach((c) => c()); // server báo "changed" -> client pull
     ws.onclose = () => {

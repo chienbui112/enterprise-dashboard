@@ -13,6 +13,8 @@ export default defineConfig({
     proxy: {
       "/api": "http://localhost:3001",
       "/ws": { target: "ws://localhost:3001", ws: true },
+      // Kênh cảm biến IoT mực nước cho FloodSim (path riêng, tách khỏi "/ws" Offline Sync).
+      "/ws-sensors": { target: "ws://localhost:3001", ws: true },
     },
   },
   build: {
@@ -23,6 +25,11 @@ export default defineConfig({
         // Tách maplibre-gl (nặng ~1MB) ra chunk vendor riêng: cache độc lập, tải song song với app code
         manualChunks(id) {
           if (id.includes("node_modules/maplibre-gl")) return "maplibre";
+          // deck.gl + loaders.gl (chỉ dùng ở FloodSim/Google 3D Tiles) -> chunk vendor riêng,
+          // tải song song & cache độc lập, không phình app chunk.
+          if (id.includes("node_modules/@deck.gl") || id.includes("node_modules/@loaders.gl") || id.includes("node_modules/@math.gl")) {
+            return "deckgl";
+          }
         },
       },
     },

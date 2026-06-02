@@ -1,13 +1,17 @@
 # Enterprise Live Tracking Dashboard
 
-A big-data WebGIS demo with **five dashboards** switchable from a top menu:
+A big-data WebGIS demo with **nine dashboards** switchable from a top menu:
 - **2D Fleet Tracking** — real-time tracking of **100,000 delivery drivers**, positions updated every **5 seconds**.
 - **3D Buildings** — heavy GeoJSON parsing + viewport-filtered **fill-extrusion** of up to **100,000 buildings**.
 - **Spatial Analysis** — real-time **Radius Scan** & **Find Nearest** queries against the moving 100k fleet using a `kdbush` index rebuilt every tick in the worker.
 - **MotionStream Fleet** — Grab/Uber-style **motion interpolation**: the worker "drips" positions only every **3 seconds**, the main thread tweens each car to **60fps** via `requestAnimationFrame`.
 - **Offline Sync** — field-survey **offline-first**: draw points/polygons + notes with no internet, cache the basemap in **IndexedDB**, auto-sync a **queue** on reconnect with **version-based conflict resolution**.
+- **Route Optimizer** — Traveling-Salesman delivery routing for 20 points: **OSRM** road-distance matrix + real road geometry, solved in a Worker via **Nearest Neighbor → 2-opt → Held-Karp** (provably optimal), drawn as **multi-modal** GPU line layers.
+- **Geofence Monitor** — real-time **geofencing** of **50,000 vehicles** against **1,000 arbitrary polygons** nationwide (Vietnam): a **spatial-grid → bbox → Turf point-in-polygon** filter pipeline in a Worker, firing **Enter/Exit** alerts only on a state change (no log storm).
+- **History Playback** — **time-travel** replay of **5,000 vehicles** over a 5-minute (**300s**) window: the whole history is one flat **space-time cube** (`Float32Array`, O(1) seek), scrubbed at 60fps with **RAF interpolation**, while a **spatial-hash grid** flags every pair of vehicles closer than **5 m** (collision risk) each frame. Includes a **ruler tool** to measure the distance between two vehicles while paused.
+- **3D Flood Digital Twin** — a flood digital twin driven by a **custom WebGL/GLSL shader**: a rising water level (from an **IoT WebSocket** feed or a slider, pushed straight into a GPU uniform without re-rendering React) submerges a 3D city. Choose the city source — synthetic buildings, **MapTiler** real OpenMapTiles 3D buildings, or **Google Photorealistic 3D Tiles** (deck.gl) — with optional **DEM terrain**, plus trees/barriers via **instanced rendering**.
 
-> React 19 · TypeScript · MapLibre GL · Web Worker · kdbush + geokdbush · idb (IndexedDB) · Vite
+> React 19 · TypeScript · MapLibre GL · Web Worker · kdbush + geokdbush · Turf.js · idb (IndexedDB) · OSRM (routing) · deck.gl + loaders.gl (3D Tiles) · custom WebGL/GLSL · Vite
 
 **Languages:** [English](#english) · [Tiếng Việt](#tiếng-việt)
 
@@ -120,29 +124,58 @@ src/
 │   │   ├── index.tsx             # MotionStreamDashboard: worker owner, packetHandlerRef (no React state per tick)
 │   │   ├── MapContainerStream.tsx # MapLibre init, idx-keyed Entry pool, RAF lerp loop, per-frame cap + FPS meter
 │   │   └── ControlPanelStream.tsx # Interpolation toggle, real FPS, viewport count, over-cap notice
-│   └── OfflineSync/              # === Offline Sync (IndexedDB offline-first) ===
-│       ├── index.tsx             # OfflineSyncDashboard: db + protocol setup, sync queue, conflict flow, prefetch
-│       ├── MapContainerOffline.tsx # Raster style via offline:// protocol, draw point/polygon, status-colored layers
-│       └── ControlPanelOffline.tsx # Network toggle, draw mode + note, prefetch, queue/conflict UI
+│   ├── OfflineSync/              # === Offline Sync (IndexedDB offline-first) ===
+│   │   ├── index.tsx             # OfflineSyncDashboard: db + protocol setup, sync queue, conflict flow, prefetch
+│   │   ├── MapContainerOffline.tsx # Raster style via offline:// protocol, draw point/polygon, status-colored layers
+│   │   └── ControlPanelOffline.tsx # Network toggle, draw mode + note, prefetch, queue/conflict UI
+│   ├── RouteOptimizer/           # === Route Optimizer (TSP / delivery routing) ===
+│   │   ├── index.tsx             # RouteOptimizerDashboard: /table → Worker(matrix) → /route → draw, refs + fallback
+│   │   ├── MapContainerTsp.tsx   # MapLibre init, points + 2 multi-modal line layers + NN compare overlay (imperative refs)
+│   │   └── ControlPanelTsp.tsx   # Optimize/regenerate, distance+time, NN→2-opt→Held-Karp chain, legend, source
+│   ├── Geofencing/               # === Geofence Monitor (50k vehicles vs 1000 polygons) ===
+│   │   ├── index.tsx             # GeofencingDashboard: worker owner, renderHandlerRef (no buffer in state), alert log
+│   │   ├── MapContainerGeofence.tsx # MapLibre init, fitBounds, GPU circle layer (data-driven red), polygon fill/outline
+│   │   └── ControlPanelGeofence.tsx # Monitoring + speed slider, stats, grid-efficiency box, live Enter/Exit alert log
+│   ├── HistoryPlayback/          # === History Playback (5k vehicles × 300s replay) ===
+│   │   ├── index.tsx             # HistoryPlaybackDashboard: cube via worker, play/seek state, alert + measure wiring
+│   │   ├── MapContainerPlayback.tsx # MapLibre init, RAF interpolation loop, per-frame proximity grid, warning + ruler layers
+│   │   └── ControlPanelPlayback.tsx # Timeline slider + play/speed, live stats (ⓘ tooltips), ruler tool, collision log
+│   └── FloodSim/                 # === 3D Flood Digital Twin (custom WebGL shader + DEM + 3D Tiles) ===
+│       ├── index.tsx             # FloodSimDashboard: scene worker, waterRef (uniform bypass), scene-source/terrain/basemap state
+│       ├── MapContainerFlood.tsx # MapLibre init, custom water + instanced layers, DEM setTerrain, deck.gl overlay, basemap setStyle
+│       └── ControlPanelFlood.tsx # Scene-source + basemap toggles, DEM, water slider/storm, IoT mode + chips, scene metrics
 ├── workers/
 │   ├── dataParser.worker.ts          # 2D: SoA master state, move-toward-destination + bearing, bbox filter, transfer
 │   ├── dataParser3d.worker.ts        # 3D: generate + parse master buildings, viewport (bbox) filtering
 │   ├── spatialAnalysis.worker.ts     # Spatial: SoA master + per-tick kdbush rebuild + dual-channel broadcast
-│   └── motionStream.worker.ts        # MotionStream: SoA master, 3s "drip" tick, viewport subset { coords, bearing, idx }
+│   ├── motionStream.worker.ts        # MotionStream: SoA master, 3s "drip" tick, viewport subset { coords, bearing, idx }
+│   ├── tspSolver.worker.ts           # Route Optimizer: pure matrix solver — Nearest Neighbor → 2-opt → Held-Karp (exact)
+│   ├── geofence.worker.ts            # Geofence Monitor: 50k SoA + 1000 polygons, spatial grid + bbox + Turf PiP, state cache
+│   ├── playbackHistory.worker.ts     # History Playback: one-shot generator of the 5k×301 space-time cube (transferable)
+│   └── floodSim.worker.ts            # Flood Twin: one-shot generator of synthetic buildings (JSON) + tree/barrier instance arrays
 │   (Offline Sync has no worker — IndexedDB + tile protocol run on the main thread)
 └── utils/
     ├── geoHelpers.ts             # 2D types, SoA generation, haversine/bearing, id/name/ETA helpers
+    ├── floodHelpers.ts          # Flood Twin: GLSL water/props shaders, mesh + scene generators, GL program helpers
+    ├── floodLayers.ts           # Flood Twin: FloodWaterLayer + InstancedPropsLayer (CustomLayerInterface)
+    ├── floodSensorFeed.ts       # Flood Twin: IoT water-level WebSocket client + backoff + client-side simulator fallback
+    ├── google3dTiles.ts         # Flood Twin: deck.gl Tile3DLayer + MapboxOverlay for Google Photorealistic 3D Tiles
+    ├── geofenceHelpers.ts       # Geofence: clustered vehicle/polygon generation + buildSpatialGrid (uniform grid index)
     ├── geoHelpers3d.ts           # 3D building types + large-JSON generator
     ├── spatialHelpers.ts         # Hand-rolled buffer circle, kdbush rehydration, around()/distance() wrappers
     ├── interpolationHelper.ts    # lerpCoordinate + computeBearing (used by MotionStream RAF loop)
     ├── indexedDbHelper.ts        # idb: clientId + per-tab local DB & shared DB, OfflineFeature CRUD, tile-cache ops
     ├── tileCacheHelper.ts        # offline:// tile protocol (cache-on-browse) + viewport prefetch + fallback tile
     ├── offlineSyncServer.ts      # Local mode "server": version CAS over the shared IndexedDB DB
-    └── syncTransport.ts          # SyncTransport interface + LocalTransport (BroadcastChannel) + RemoteTransport (REST/WS)
+    ├── syncTransport.ts          # SyncTransport interface + LocalTransport (BroadcastChannel) + RemoteTransport (REST/WS)
+    ├── osrmHelper.ts             # Route Optimizer: OSRM /table + /route wrappers, haversine fallback matrix, mode assign
+    ├── routeApiHelper.ts         # Route Optimizer: delivery-point generator + synthetic per-leg polyline (fallback)
+    └── playbackHelpers.ts        # History Playback: space-time cube generator + O(1) frame index + ProximityDetector (hash grid)
 
-server/                          # === Offline Sync "Backend" mode (standalone Node, not bundled) ===
-├── index.js                     # Express + ws: /api/push, /api/pull, /api/simulate, WS /ws
-└── store.js                     # version store + CAS + seq, persisted to data.json
+server/                          # === Standalone Node backend (not bundled): Offline Sync + Flood IoT ===
+├── index.js                     # Express + ws: /api/push, /api/pull, /api/simulate; routes WS /ws (sync) + /ws-sensors (IoT)
+├── store.js                     # Offline Sync: version store + CAS + seq, persisted to data.json
+└── sensorFeed.js                # Flood Twin: /ws-sensors WebSocketServer broadcasting water-level readings (~500ms)
 ```
 
 ## 6. Running the Project
@@ -161,7 +194,7 @@ In the UI: enable **Real-time SSE Stream** to simulate 5s updates; pan/zoom to w
 ## 7. Future Work (real production)
 
 - **Backend pushing deltas per viewport** over WebSocket/SSE (instead of the client-side simulation) — sending only changed vehicles, using `source.updateData()` (diff) instead of a full `setData`.
-- ETA using actual routing (routing/OSRM) instead of great-circle distance × average speed.
+- ETA using actual routing (routing/OSRM) instead of great-circle distance × average speed — now realized in the **Route Optimizer** dashboard (§12).
 - Lazy-load the `maplibre` chunk if first-load time needs optimizing.
 
 ## 8. 3D Buildings Module
@@ -258,19 +291,172 @@ Both sync modes sit behind a `SyncTransport` interface ([`syncTransport.ts`](src
 - **`LocalTransport`** wraps the shared-IndexedDB server + `BroadcastChannel` (§11.1–11.5).
 - **`RemoteTransport`** talks to a small Node backend in [`server/`](server/) — **Express + `ws`**, version-CAS in [`store.js`](server/store.js), persisted to `server/data.json`. `push`/`pull` are `fetch("/api/...")`; remote changes arrive over a **WebSocket** at `/ws` (the server broadcasts `{type:"changed"}` after every accepted write, and each client then pulls). [`vite.config.ts`](vite.config.ts) proxies `/api` + `/ws` to `localhost:3001` so it's same-origin (no CORS).
 - **Run it:** `npm run server` (or `npm run dev:all` for Vite + backend together), then pick **Backend** in the panel. Now Chrome, Firefox, an incognito tab, or another machine on the network all sync against the same server, with the **same** version-based conflict resolution. If the backend is down, the dashboard shows 🔴 and **auto-falls back to Local**.
+- **Resilient WebSocket:** auto-reconnects with exponential backoff (1s→2s→…→32s cap, retries forever until the transport is closed); on **reconnect** it immediately triggers a `pull` so changes missed while disconnected are caught up at once (idempotent via the `seq` cursor). While down, the panel shows 🔴.
 - **Verified:** opening **two different browsers** in Backend mode syncs drawings/edits between them in real time (WebSocket → pull).
 - **Caveats:** dev-time only (relies on the Vite proxy; production would host the server separately). Local and Backend are **separate servers** (shared IndexedDB vs JSON file) — data isn't auto-migrated between modes, so pick a mode up front.
+
+## 12. Route Optimizer Module (TSP / delivery routing)
+
+A sixth dashboard ([`src/components/RouteOptimizer/`](src/components/RouteOptimizer/)) solves the **Traveling Salesman Problem** for 20 random delivery points around Hanoi: find the visiting order that minimizes total travel. It reuses the worker-owned, imperative-bridge philosophy — the algorithm runs in a Web Worker, all geometry lives in `useRef`, and only the final ordered result reaches React state.
+
+### 12.1. Real road routing (OSRM), not great-circle
+Earlier iterations faked both the cost (haversine) and the drawn line (a sine-bent polyline) — so the route ignored the actual street network. Now two OSRM calls (public demo server `router.project-osrm.org`, `driving` profile) make it real:
+- **`/table`** returns the N×N **road** distance + duration matrix in milliseconds (Contraction Hierarchies). This is what the TSP optimizes on — not straight-line distance.
+- **`/route`** (`geometries=geojson`, `steps=true`) returns the detailed road geometry of the optimized order in **one** request; per-leg geometry is rebuilt by concatenating each leg's step geometries.
+
+Both calls go straight from the browser (no backend needed) and **fall back gracefully** — if OSRM is unreachable/rate-limited the dashboard rebuilds a haversine matrix and a synthetic polyline, mirroring the project's auto-fallback ethos (Offline Sync → Local, tiles → gray). The panel reports which source was used.
+
+> [`src/utils/osrmHelper.ts`](src/utils/osrmHelper.ts) · [`src/utils/routeApiHelper.ts`](src/utils/routeApiHelper.ts)
+
+### 12.2. Three TSP algorithms, run in sequence (each ≤ the previous)
+The worker is a **pure matrix solver**: the main thread hands it the cost matrix; it never sees coordinates.
+- **Nearest Neighbor** (greedy, O(N²)): from the depot, always hop to the nearest unvisited point. <1ms, ~25% above optimal — used as a starting tour.
+- **2-opt** (local search, O(N²)/pass): removes crossing edges by reversing the segment between two edges; accepts a swap when `D(a,c)+D(b,d) − D(a,b) − D(c,d) < 0`. A few ms, ~2–5% above optimal (a *local* minimum).
+- **Held-Karp** (dynamic programming, O(N²·2ᴺ)) when N ≤ 20: `dp[mask][j]` = min cost from the depot visiting exactly set `mask`, ending at `j`. **Provably optimal**. At N=20 the table is a `Float32Array` of ~84MB and takes ~1–2s — affordable in the worker (off the UI thread). N>20 skips it and keeps the 2-opt result.
+
+So `nnKm ≥ twoOptKm ≥ exactKm`, shown as an improvement chain on the panel with a "✓ optimal" badge. Because Held-Karp is tractable at N=20, a Genetic Algorithm is unnecessary at this scale (it pays off only at larger N or with extra constraints → VRP).
+
+> [`src/workers/tspSolver.worker.ts`](src/workers/tspSolver.worker.ts)
+
+### 12.3. Multi-modal rendering + NN comparison overlay
+The route source is a `FeatureCollection` of per-leg `LineString`s, each tagged with a `mode`. Two line layers render it because **`line-dasharray` is not data-driven in MapLibre** — you can't vary the dash per-feature via an expression. So a solid green layer (`mode == "ride"`, motorbike) and a dashed blue layer (`mode == "walk"`, short "into the alley" legs) are filtered by the property. (The OSRM demo only has a car profile, so the mode split is **illustrative** — geometry is always the driving route.)
+
+Ticking **"overlay Nearest Neighbor"** draws the raw NN tour as **straight** dashed-red lines connecting the points in NN order. Straight (not road-snapped) on purpose: 2-opt/Held-Karp exist to untie *crossing* edges, and straight segments make those crossings visible against the optimal route below.
+
+> [`src/components/RouteOptimizer/MapContainerTsp.tsx`](src/components/RouteOptimizer/MapContainerTsp.tsx) · [`ControlPanelTsp.tsx`](src/components/RouteOptimizer/ControlPanelTsp.tsx) · [`index.tsx`](src/components/RouteOptimizer/index.tsx)
+
+Flow: **`/table` → Worker(matrix) → `/route` → draw**. The orchestrator keeps the matrices, leg geometry, and NN overlay coords in refs; only the final ordered list + total distance/time goes to React state.
+
+## 13. Geofence Monitor Module (real-time geofencing at scale)
+
+A seventh dashboard ([`src/components/Geofencing/`](src/components/Geofencing/)) monitors **50,000 vehicles** moving across **all of Vietnam** and raises an instant alert whenever a vehicle **enters** or **exits** any of **1,000 arbitrarily-shaped restricted zones (polygons)**. The worker owns the entire dataset and runs the whole detection pipeline; the main thread only renders the viewport subset as a GPU circle layer.
+
+### 13.1. Why a naive check explodes — and the spatial grid that fixes it
+The obvious approach — test every vehicle against every polygon every tick — is `50,000 × 1,000 = 50,000,000` point-in-polygon checks per tick. That melts the worker. The fix is a **three-layer filter pipeline** ([`geofence.worker.ts`](src/workers/geofence.worker.ts), [`geofenceHelpers.ts`](src/utils/geofenceHelpers.ts)):
+
+- **Layer 0 — Spatial grid index.** `buildSpatialGrid` lays a uniform grid (~0.3° cells) over the country bbox and hashes each polygon into **every cell its bbox touches**. At query time a vehicle maps to exactly **one** cell and only considers the handful of polygons registered there → complexity drops from `O(vehicles × allZones)` to `O(vehicles × zonesPerCell)`. **This is the change that makes the larger area tractable.**
+- **Layer 1 — Bounding box (algebra).** For each candidate polygon, a cheap `xmin ≤ x ≤ xmax && ymin ≤ y ≤ ymax` test (precomputed `zoneBboxFlat`). Still needed because a polygon's bbox can spill into a neighbouring grid cell.
+- **Layer 2 — Turf `booleanPointInPolygon`.** Only the survivors of Layers 0+1 hit the exact geometry test ([Turf.js](https://turfjs.org/)); the coordinate is passed as a raw `[lng, lat]` array (no per-call object allocation).
+
+### 13.2. State cache — alert on the *transition*, not the *condition*
+A raw typed array `Int16Array zoneOf` (one slot per vehicle, value = current zone id, `-1` = outside everything) is the **previous-state cache** — deliberately **not** React state. Each tick the worker compares the freshly-computed zone against `zoneOf[i]`: an **Enter** fires only on `outside → inside`, an **Exit** only on `inside → outside`. A vehicle sitting still *inside* a zone for a thousand ticks produces **zero** repeat alerts. A `primed` flag makes tick 0 a silent baseline so vehicles that spawn already inside a zone don't all fire a false "enter".
+
+### 13.3. Rendering, clustering of motion, and the speed control
+Vehicles are spawned in **clusters around 12 Vietnam city anchors** (weighted by size) and each roams within `ROAM_RADIUS` of its "home", so the fleet stays on land and keeps crossing zones (instead of drifting uniformly into the sea). They render as a **GPU `circle` layer** with **data-driven color** — `["case", ["==", ["get","v"], 1], red, blue]` — so violators turn red without per-feature JS. The render channel reuses the project's viewport-filtered **two-pass count-then-pack** + transferables, plus a `Uint8Array violating` flag. A **speed slider** sends `SET_SPEED { factor }` to scale movement live (drag to **0** to freeze — detection keeps running but no new transitions occur). On load the map `fitBounds` to the country bbox.
+
+### 13.4. Panel metrics — what each value means
+The control panel ([`ControlPanelGeofence.tsx`](src/components/Geofencing/ControlPanelGeofence.tsx)) shows:
+
+| Metric | Meaning |
+|--------|---------|
+| **Xe đang vi phạm** (Vehicles violating) | **Instantaneous** count of vehicles currently inside any zone (`zoneOf[i] !== -1`), over the *whole* fleet — not just the viewport. Goes up and down. |
+| **Xe trong viewport** (Vehicles in viewport) | How many vehicles fall inside the current map view — i.e. how many dots are actually drawn this tick (the bbox-filtered render subset). |
+| **Tổng lượt VÀO (Enter)** | **Running total** (only ever increases) of `outside → inside` transitions since monitoring started. A *flow* counter — how many border-crossings into zones have happened, not how many vehicles are inside now. |
+| **Tổng lượt RA (Exit)** | Same, for `inside → outside` transitions. Tracks Enter closely over time (every entry is eventually followed by an exit); Enter usually leads slightly because some vehicles are still inside. |
+| **Turf PiP checks/tick** | Number of `booleanPointInPolygon` calls executed in the **most recent tick** — i.e. how many vehicles survived Layers 0+1 and needed the exact test. This is the **performance proof**: it's typically a few thousand, vs. the 50,000,000 a brute-force scan would do. Fluctuates per tick with how many vehicles are near zones. |
+| **Simulation ticks** | How many worker ticks have run. Each tick is **250 ms** (4 Hz), so `ticks × 0.25 s` ≈ elapsed monitoring time. Stops incrementing if you pause monitoring. |
+| **Cảnh báo trực tiếp** header | `(N events · showing 80 latest)` — `N` is the true running total (`Enter + Exit`); the scrollable list is capped at the **80 most recent** rows so the panel stays light. The list length sitting at 80 is the cap, not the event count. |
+
+Message contract: main→worker `INIT_DATA { count, geofenceCount, bbox }`, `UPDATE_BBOX { bbox }`, `SET_STREAMING { isActive }`, `SET_INTERACTING { isActive }`, `SET_SPEED { factor }`; worker→main `GEOFENCES_READY { geojson }` (polygons, sent once), `DATA_UPDATED { count, coords, violating, idx, totalViolating, pipCount, alerts }` (typed arrays transferable; `alerts` = transitions only), and `ALERTS_ONLY { alerts, totalViolating, pipCount }` (emitted **during** pan/zoom so monitoring never pauses). Detection runs over all vehicles regardless of viewport; only the render channel is bbox-filtered.
+
+## 14. History Playback Module (time-series replay + proximity detection)
+
+An eighth dashboard ([`src/components/HistoryPlayback/`](src/components/HistoryPlayback/)) leaves the live-streaming theme behind and tackles **historical replay**: scrub back and forth through the recorded movement of **5,000 vehicles** over a **300-second** window, and automatically surface every pair of vehicles that came **closer than 5 m** (collision risk) at any instant. The heavy data generation runs in a worker; the interactive replay + detection run on the main thread at 60fps.
+
+### 14.1. Space-time data structure (RAM-optimal, O(1) seek)
+A naive `Vehicle[][]` (one array of objects per second) would be **millions of objects** — RAM blowup and constant GC. Instead the entire history is **one flat `Float32Array` "space-time cube"** ([`playbackHelpers.ts`](src/utils/playbackHelpers.ts)) laid out `[frame][vehicle][lng,lat]` with `offset(t,i) = t*stride + i*2` (`stride = count*2`):
+- the vehicle id **is** its array index `i` (stable across every frame) → no id is stored;
+- the frame for second `t` is a **zero-copy `subarray` view** onto the same buffer, so the required `Map<timestamp, frame>` ([`buildFrameIndex`](src/utils/playbackHelpers.ts)) gives **O(1)** seek with **zero extra allocation**;
+- total footprint: 5k × 301 × 2 × 4 B ≈ **12 MB** for the whole history, generated once in [`playbackHistory.worker.ts`](src/workers/playbackHistory.worker.ts) and **transferred zero-copy** (not structured-cloned).
+
+Each vehicle is generated as a flowing "traffic" trajectory (heading + speed, small per-second steering, reflecting off the region bounds) inside a compact ~3.5 km × 2.8 km neighbourhood so density is high enough that pairs genuinely pass within 5 m — the near-misses are emergent, not scripted.
+
+### 14.2. Playback controller (60fps RAF interpolation)
+The timeline runs 0→300 s. A `requestAnimationFrame` loop ([`MapContainerPlayback.tsx`](src/components/HistoryPlayback/MapContainerPlayback.tsx)) advances `time += dt × speed` and **linearly interpolates** each vehicle between the two adjacent integer-second frames, pushing to MapLibre via `source.setData()` — so motion stays smooth at 60fps regardless of playback speed (1×–60×). The slider is two-way: the RAF loop publishes the current time back to React **throttled** (~16 Hz) so the dashboard never re-renders per frame; dragging the slider uses a **`seekNonce` token** so RAF-driven updates don't trigger a re-seek loop (the project's ref-for-prop pattern). Vehicles render as a GPU `circle` layer with data-driven colour — red when a vehicle is in a near-collision, cyan otherwise — via an object pool (no per-frame allocation).
+
+### 14.3. Proximity detection — spatial hash grid (no O(N²))
+Comparing all pairs is `5000 × 4999 / 2 ≈ 12.5 M` checks **per frame** — impossible at 60fps. [`ProximityDetector`](src/utils/playbackHelpers.ts) instead hashes vehicles into a **uniform grid whose cell size equals the 5 m threshold**: two vehicles can only be within 5 m if they share a cell or a neighbouring one, so each vehicle is compared only against the **9 surrounding cells** (and only `j > i` to avoid double-counting). This collapses to ~O(N) at even density. Bucket arrays are recycled via a free-list and the per-vehicle `cellIdx` is reused, so after warm-up the detector allocates **almost nothing per frame**. The detector runs **every frame on the interpolated positions**, so the warning circles track exactly what's drawn. A near-collision is logged only when a pair **newly** comes within range (a transition, like the geofence Enter cache) so the list doesn't flood; each hit also draws an **amber-halo + red-core** warning circle at the pair's midpoint.
+
+### 14.4. Ruler tool (measure distance while paused)
+Toggling **📏 Thước đo** pauses playback (so vehicles are frozen for an accurate read) and turns clicks into a measurement: click two vehicles to draw a dashed-yellow line between them (lime endpoint A, orange endpoint B) with a live distance label (`haversine`, shown in m or km) both on the map and in the panel. Clicking a third vehicle starts a new pair. The measurement also re-draws while you scrub the slider, so you can compare the same pair's distance at different moments. (The selected pair is tracked in refs; nothing per-frame reaches React state while playing.)
+
+### 14.5. Panel metrics — what each value means
+The control panel ([`ControlPanelPlayback.tsx`](src/components/HistoryPlayback/ControlPanelPlayback.tsx)) shows (hover the ⓘ for an inline tooltip):
+
+| Value | Meaning |
+|-------|---------|
+| **Timeline `mm:ss / mm:ss`** + **speed (1×–60×)** | Current position within the 300 s window / total. Speed = **history-seconds played per real-second** (10× ⇒ the full 300 s plays in 30 s). Dragging the slider seeks to any second in **O(1)** (zero-copy view into the cube). |
+| **Cặp đang va chạm gần** (Pairs in near-collision) | **Instantaneous** count of vehicle pairs currently within 5 m **at the exact displayed frame**. Rises and falls as you play; `0` means no collision risk at that moment. |
+| **Tổng sự kiện đã ghi** (Total events logged) | **Running total** (only increases) of times a **new** pair came within range — counted on the *onset* of proximity, not re-counted every frame the pair stays close. Only grows while playing; scrubbing by hand emits nothing. |
+| **Phép so cặp / frame** (Pair comparisons / frame) | The number of distance comparisons the spatial grid **actually** ran this frame (only vehicles in the same or neighbouring cells). This is the **performance proof**: typically a few thousand vs. the ~12.5 M an O(N²) sweep would do. |
+| **FPS** | Real measured framerate of the RAF loop (published ~2 Hz). Target 60 — it measures interpolation **+** per-frame proximity detection **+** `setData`, all together. |
+| **Thời gian dựng cube** (Cube build time) | How long the Worker took to generate the entire space-time cube (5,000 × 301 frames) **once** on open, before transferring it zero-copy. After that, scrubbing costs no further generation. |
+| **Spatial grid** box | Restates *pair comparisons/frame* against the brute-force `N²/2` figure — the live efficiency ratio of the grid. |
+| **Thước đo** readout | When the ruler is on: the two selected vehicles + their distance (m/km). Shown only while paused. |
+
+Message contract: main→worker `GENERATE { count, frames }`; worker→main `GENERATED { cube, count, frames, stride, genMs }` (the `cube` `ArrayBuffer` is **transferable**). Unlike the other workers this one is **stateless and one-shot** — no `setInterval`, no bbox, no fetching: it generates the cube once and the main thread owns playback + detection thereafter (closest in spirit to Offline Sync's main-thread work, but with a worker for the heavy generation step).
+
+## 15. 3D Flood Digital Twin Module (custom WebGL shader + DEM + 3D Tiles)
+
+A ninth dashboard ([`src/components/FloodSim/`](src/components/FloodSim/)) is a flood **digital twin**: a 3D city whose streets and building bases are submerged by a rising water level driven in real time from IoT sensors. Unlike every other dashboard it drops **below MapLibre's style API into raw GLSL**, via two `CustomLayerInterface` layers sharing the map's GL context.
+
+### 15.1. The custom water shader (the centerpiece)
+[`FloodWaterLayer`](src/utils/floodLayers.ts) is a **flat translucent plane** held at `u_levelZ` (water altitude, metres → mercator). The wave look is done **entirely in the fragment shader** (sum-of-sines colour + moving specular), computed from **real-world metres** (`v_local = (a_pos − u_origin) / u_meter`) so the wavelength is fixed in world space and looks identical at every zoom. The plane is a single large quad covering the view; it's drawn last with `depthMask(false)` + alpha blend so it reads the building/terrain depth and submerges anything below the level, with `gl.POLYGON_OFFSET_FILL(0, −4)` (**constant bias only**, slope factor 0) to win the far-field z-fight against the ground without climbing walls at oblique pitch. Buildings render fully opaque so the depth is clean. See [§ the GLSL in `floodHelpers.ts`](src/utils/floodHelpers.ts).
+
+### 15.2. The slider bypasses React (uniform-driven)
+Water level lives in a `useRef<{ meters }>` **shared object** handed to both WebGL layers at construction. The uncontrolled `<input type=range>`'s `onChange` mutates `waterRef.current.meters` and updates the thumb + numeric label via **DOM refs** — never React state — so dragging pushes the value straight into the GPU uniform **without re-rendering the map**. A real 0–5 m flood against 100 m towers is an imperceptibly thin sheet, so the water-plane altitude (and the props' underwater-tint threshold) are multiplied by `FLOOD_VIS_SCALE` (×4, **vertical exaggeration** — the slider still reads real metres).
+
+### 15.3. Instanced rendering (trees + rescue barriers)
+[`InstancedPropsLayer`](src/utils/floodLayers.ts) draws thousands of trees (trunk box + 2 cones) and barriers (box + reflective stripe) via **`drawArraysInstanced`** (WebGL2) / `ANGLE_instanced_arrays` (WebGL1 fallback): one shared base-mesh VBO + a small per-instance VBO (`[mercX, mercY, scale, rot]`, 16 B/instance), so VRAM stays flat regardless of count. Parts of a prop below the water level are tinted blue ("underwater").
+
+### 15.4. Three scene sources (toggle on the panel)
+- **🏙️ Synthetic** — buildings (`fill-extrusion`) + instanced props generated one-shot in [`floodSim.worker.ts`](src/workers/floodSim.worker.ts).
+- **🗼 MapTiler** — **real** 3D buildings from MapTiler **OpenMapTiles vector** tiles via native MapLibre `fill-extrusion` on the `building` layer (`render_height`/`render_min_height`) — *not* deck.gl/3D-Tiles (`v3-openmaptiles/tiles.json` is a vector tileset). Needs a MapTiler key; the key is **origin-restricted**, so a 403 means the origin isn't allowlisted at cloud.maptiler.com.
+- **🌍 Google** — **OGC Photorealistic 3D Tiles** via deck.gl `Tile3DLayer` + `@deck.gl/mapbox` `MapboxOverlay({ interleaved: true })` ([`google3dTiles.ts`](src/utils/google3dTiles.ts)), sharing the depth buffer so the water still floods by real elevation. Needs the **Map Tiles API enabled** on the Google Cloud project or the tileset 403s. deck.gl + loaders.gl are isolated in a lazy `deckgl` vendor chunk.
+
+Both real-world sources hide the synthetic buildings/props. Keys are overridable via `VITE_MAPTILER_KEY` / `VITE_GOOGLE_3D_TILES_KEY`.
+
+### 15.5. DEM terrain + IoT WebSocket feed
+- **DEM** — a `raster-dem` Terrarium source (public, no key) + `map.setTerrain` so the flood follows real ground elevation; applies to **Synthetic & MapTiler** (Google supplies its own terrain).
+- **IoT feed** — in "📡 Cảm biến IoT" mode a WebSocket ([`floodSensorFeed.ts`](src/utils/floodSensorFeed.ts) → `/ws-sensors`, served by [`server/sensorFeed.js`](server/sensorFeed.js)) streams water-level readings every ~500 ms into the same uniform path; it reconnects with backoff and **auto-falls back to a client-side simulator** when the backend is down (so `npm run dev` still works). A **separate** `/ws-sensors` path (its own `WebSocketServer`) keeps it from colliding with Offline Sync's `/ws`.
+
+### 15.6. Panel values — what each control/metric means
+The control panel ([`ControlPanelFlood.tsx`](src/components/FloodSim/ControlPanelFlood.tsx)):
+
+| Control / value | Meaning |
+|-----------------|---------|
+| **Nguồn cảnh 3D** (Scene source) — 🏙️ Synthetic / 🗼 MapTiler / 🌍 Google | Picks what renders the 3D city: generated boxes, real MapTiler vector buildings, or Google photorealistic 3D Tiles (§15.4). Switching hides/shows the relevant layers. |
+| **Địa hình DEM thật** checkbox (Synthetic/MapTiler) | Toggles real terrain (`raster-dem`); when on, the flood waterline follows ground elevation instead of a flat z=0. |
+| **Phóng đại** ×N (terrain) | Vertical exaggeration of the DEM terrain mesh (Hanoi is flat, so this makes relief visible). Pure display scale. |
+| **3D Tiles status chip** (Google) | `Sẵn sàng` (idle) → `Đang tải…` (loading) → `đã tải` (ready) / `Lỗi tải tiles` (error — usually the Map Tiles API isn't enabled). |
+| **Bản đồ nền** (Basemap) — 🌑 Tối / ☀️ Sáng / 🗺️ Voyager | Switches the Carto base style (dark / light / streets). Triggers `map.setStyle()`, after which all custom layers/terrain/overlay are rebuilt automatically. |
+| **Nguồn mực nước** (Water source) — 📡 IoT / ✋ Thủ công | IoT = the WebSocket sensor feed drives the level (slider read-only); Manual = you control the slider + storm. |
+| **Feed status chip** (IoT mode) | `LIVE` (green, real sensor) / `SIMULATED` (amber, no backend → client simulator) / `CONNECTING`, plus the station id. |
+| **Mức độ ngập lụt: X.X m** + slider (0–5 m) | The flood water level in **real metres** — pushed straight into the `u_water_level` GPU uniform (no React re-render). Rendered altitude is ×4 (visual exaggeration) so the rise is visible; the number is the true metres. |
+| **🌊 Mô phỏng bão về (0 → 5m)** button | A scripted "storm": ramps the level slowly 0→5 m (Manual mode only). |
+| **Toà nhà (fill-extrusion)** | Count of synthetic buildings in the scene (the generated GeoJSON feature count). |
+| **Cây xanh (instanced)** | Count of tree instances drawn by the instanced layer (one shared mesh). |
+| **Rào chắn (instanced)** | Count of rescue-barrier instances drawn by the instanced layer. |
+| **Worker sinh cảnh** | Time (ms) the worker took to generate the whole synthetic scene **once** (building JSON + prop arrays), before transferring it. |
+| **Tổng vật thể props** | trees + barriers — the total instance count fed to the GPU from a single mesh upload (the "instancing" headline figure). |
+| **↻ Sinh lại bản sao số đô thị** button | Regenerates the synthetic scene (new random buildings/props). |
+
+Message contracts: **IoT** server→client on a **separate** `/ws-sensors` path — `{ type:"sensor", stationId, level, ts }` every ~500 ms (`level` 0–5 m). **Scene worker** ([`floodSim.worker.ts`](src/workers/floodSim.worker.ts)) main→worker `GENERATE { buildingCount, treeCount, barrierCount }`; worker→main `SCENE_READY { buildings, trees, barriers, genMs }` (`buildings` structured-cloned, `trees`/`barriers` transferable). A deep architecture analysis (3D Tiles/HLOD trade-offs, DEM, instancing at scale) lives in [`docs/flood-architecture.md`](docs/flood-architecture.md).
 
 ---
 
 # Tiếng Việt
 
-Demo WebGIS dữ liệu lớn gồm **năm dashboard**, chuyển đổi bằng menu trên cùng:
+Demo WebGIS dữ liệu lớn gồm **chín dashboard**, chuyển đổi bằng menu trên cùng:
 - **2D Fleet Tracking** — theo dõi real-time **100.000 tài xế giao hàng**, vị trí cập nhật mỗi **5 giây**.
 - **3D Buildings** — parse GeoJSON nặng + dựng khối **fill-extrusion** lọc theo viewport, tới **100.000 toà nhà**.
 - **Spatial Analysis** — truy vấn **Radius Scan** & **Find Nearest** real-time trên đội xe 100k đang chuyển động, dùng `kdbush` index rebuild trong worker mỗi tick.
 - **MotionStream Fleet** — **nội suy chuyển động** kiểu Grab/Uber: worker chỉ "nhỏ giọt" tọa độ mỗi **3 giây**, main thread tween từng xe lên **60fps** bằng `requestAnimationFrame`.
 - **Offline Sync** — **offline-first** cho khảo sát hiện trường: vẽ điểm/vùng + ghi chú khi mất mạng, cache bản đồ nền vào **IndexedDB**, có mạng lại thì tự đồng bộ **hàng đợi** với **xử lý xung đột theo version**.
+- **Route Optimizer** — định tuyến giao hàng theo bài toán Người bán hàng (TSP) cho 20 điểm: ma trận khoảng cách **đường thật từ OSRM** + hình học đường thật, giải trong Worker bằng **Nearest Neighbor → 2-opt → Held-Karp** (tối ưu tuyệt đối), vẽ bằng **line layer đa phương thức** trên GPU.
+- **Geofence Monitor** — **giám sát vùng cấm** real-time cho **50.000 xe** trên **toàn Việt Nam** với **1.000 polygon hình thù bất kỳ**: pipeline lọc **spatial-grid → bbox → Turf point-in-polygon** trong Worker, chỉ phát cảnh báo **Enter/Exit** khi trạng thái đổi (không bão log).
+- **History Playback** — **tua lại lịch sử** di chuyển của **5.000 xe** trong cửa sổ 5 phút (**300s**): toàn bộ lịch sử là một **khối không-thời gian** phẳng (`Float32Array`, truy xuất O(1)), tua mượt 60fps bằng **nội suy RAF**, đồng thời mỗi frame một **spatial-hash grid** đánh dấu mọi cặp xe cách nhau dưới **5 m** (nguy cơ va chạm). Kèm **thước đo** khoảng cách giữa 2 xe khi tạm dừng.
+- **3D Flood Digital Twin** — bản sao số mô phỏng ngập lụt bằng **custom WebGL/GLSL shader**: mực nước dâng (từ feed **IoT qua WebSocket** hoặc slider, bơm thẳng vào uniform GPU mà không re-render React) nhấn chìm thành phố 3D. Chọn nguồn cảnh: nhà giả lập, **MapTiler** (nhà OpenMapTiles thật), hoặc **Google Photorealistic 3D Tiles** (deck.gl) — kèm **địa hình DEM** tuỳ chọn, cây/rào dùng **Instanced Rendering**.
 
 ## 1. Bài toán
 
@@ -358,7 +544,7 @@ MapLibre gom cụm tới `clusterMaxZoom: 14`; ở zoom thấp/trung chỉ vẽ 
 
 ```
 src/
-├── App.tsx                # Menu trên cùng chuyển đổi giữa 5 dashboard
+├── App.tsx                # Menu trên cùng chuyển đổi giữa 6 dashboard
 ├── components/
 │   ├── MapLoadingOverlay.tsx     # Overlay loading dùng chung (pointerEvents:none): 2D/Spatial dùng hasFirstData, 3D dùng isProcessing
 │   ├── MapContainer/             # === 2D Fleet Tracking ===
@@ -377,29 +563,58 @@ src/
 │   │   ├── index.tsx             # MotionStreamDashboard: sở hữu worker, packetHandlerRef (không qua React state mỗi tick)
 │   │   ├── MapContainerStream.tsx # Khởi tạo MapLibre, pool Entry theo idx, vòng lặp RAF lerp, cap mỗi frame + đo FPS
 │   │   └── ControlPanelStream.tsx # Toggle nội suy, FPS thật, số xe trong viewport, cảnh báo vượt cap
-│   └── OfflineSync/              # === Offline Sync (IndexedDB offline-first) ===
-│       ├── index.tsx             # OfflineSyncDashboard: setup db + protocol, hàng đợi sync, luồng conflict, prefetch
-│       ├── MapContainerOffline.tsx # Style raster qua protocol offline://, vẽ điểm/polygon, layer tô màu theo trạng thái
-│       └── ControlPanelOffline.tsx # Toggle mạng, draw mode + ghi chú, prefetch, UI hàng đợi/conflict
+│   ├── OfflineSync/              # === Offline Sync (IndexedDB offline-first) ===
+│   │   ├── index.tsx             # OfflineSyncDashboard: setup db + protocol, hàng đợi sync, luồng conflict, prefetch
+│   │   ├── MapContainerOffline.tsx # Style raster qua protocol offline://, vẽ điểm/polygon, layer tô màu theo trạng thái
+│   │   └── ControlPanelOffline.tsx # Toggle mạng, draw mode + ghi chú, prefetch, UI hàng đợi/conflict
+│   ├── RouteOptimizer/           # === Route Optimizer (TSP / định tuyến giao hàng) ===
+│   │   ├── index.tsx             # RouteOptimizerDashboard: /table → Worker(matrix) → /route → vẽ, refs + fallback
+│   │   ├── MapContainerTsp.tsx   # Khởi tạo MapLibre, điểm + 2 line layer đa phương thức + overlay so sánh NN (refs imperative)
+│   │   └── ControlPanelTsp.tsx   # Nút tối ưu/tạo điểm, quãng đường+thời gian, chuỗi NN→2-opt→Held-Karp, chú giải, nguồn
+│   ├── Geofencing/               # === Geofence Monitor (50k xe vs 1000 polygon) ===
+│   │   ├── index.tsx             # GeofencingDashboard: sở hữu worker, renderHandlerRef (không đẩy buffer vào state), log alert
+│   │   ├── MapContainerGeofence.tsx # Khởi tạo MapLibre, fitBounds, layer circle GPU (đỏ data-driven), fill/outline polygon
+│   │   └── ControlPanelGeofence.tsx # Toggle giám sát + thanh tốc độ, chỉ số, ô hiệu quả grid, log cảnh báo Enter/Exit live
+│   ├── HistoryPlayback/          # === History Playback (tua lại 5k xe × 300s) ===
+│   │   ├── index.tsx             # HistoryPlaybackDashboard: cube qua worker, state play/seek, wiring alert + thước đo
+│   │   ├── MapContainerPlayback.tsx # Khởi tạo MapLibre, vòng RAF nội suy, spatial grid dò va chạm mỗi frame, layer cảnh báo + thước đo
+│   │   └── ControlPanelPlayback.tsx # Slider timeline + play/tốc độ, chỉ số live (tooltip ⓘ), thước đo, log va chạm
+│   └── FloodSim/                 # === 3D Flood Digital Twin (custom WebGL shader + DEM + 3D Tiles) ===
+│       ├── index.tsx             # FloodSimDashboard: worker sinh cảnh, waterRef (bypass uniform), state nguồn cảnh/terrain/basemap
+│       ├── MapContainerFlood.tsx # Khởi tạo MapLibre, custom layer nước + props instanced, DEM setTerrain, overlay deck.gl, đổi basemap setStyle
+│       └── ControlPanelFlood.tsx # Toggle nguồn cảnh + basemap, DEM, slider/bão mực nước, chế độ IoT + chip, chỉ số cảnh
 ├── workers/
 │   ├── dataParser.worker.ts          # 2D: master SoA, di chuyển về đích + bearing, lọc bbox, transfer
 │   ├── dataParser3d.worker.ts        # 3D: generate + parse master toà nhà, lọc theo viewport (bbox)
 │   ├── spatialAnalysis.worker.ts     # Spatial: SoA master + rebuild kdbush mỗi tick + broadcast 2 channel
-│   └── motionStream.worker.ts        # MotionStream: master SoA, tick "nhỏ giọt" 3s, subset viewport { coords, bearing, idx }
+│   ├── motionStream.worker.ts        # MotionStream: master SoA, tick "nhỏ giọt" 3s, subset viewport { coords, bearing, idx }
+│   ├── tspSolver.worker.ts           # Route Optimizer: bộ giải ma trận thuần — Nearest Neighbor → 2-opt → Held-Karp (chính xác)
+│   ├── geofence.worker.ts            # Geofence Monitor: 50k SoA + 1000 polygon, spatial grid + bbox + Turf PiP, cache trạng thái
+│   ├── playbackHistory.worker.ts     # History Playback: sinh một-lần khối không-thời gian 5k×301 (transferable)
+│   └── floodSim.worker.ts            # Flood Twin: sinh một-lần nhà giả lập (JSON) + mảng instance cây/rào
 │   (Offline Sync không có worker — IndexedDB + tile protocol chạy ở main thread)
 └── utils/
     ├── geoHelpers.ts             # Kiểu dữ liệu 2D, sinh SoA, haversine/bearing, helper id/name/ETA
+    ├── floodHelpers.ts          # Flood Twin: shader GLSL nước/props, bộ sinh mesh + cảnh, helper GL program
+    ├── floodLayers.ts           # Flood Twin: FloodWaterLayer + InstancedPropsLayer (CustomLayerInterface)
+    ├── floodSensorFeed.ts       # Flood Twin: client WebSocket mực nước IoT + backoff + fallback simulator client
+    ├── google3dTiles.ts         # Flood Twin: deck.gl Tile3DLayer + MapboxOverlay cho Google Photorealistic 3D Tiles
+    ├── geofenceHelpers.ts       # Geofence: sinh xe/polygon theo cụm + buildSpatialGrid (lưới index đều)
     ├── geoHelpers3d.ts           # Kiểu dữ liệu toà nhà 3D + bộ sinh JSON lớn
     ├── spatialHelpers.ts         # Buffer circle tự viết, rehydrate kdbush, wrapper around()/distance()
     ├── interpolationHelper.ts    # lerpCoordinate + computeBearing (vòng lặp RAF của MotionStream dùng)
     ├── indexedDbHelper.ts        # idb: clientId + local DB per-tab & shared DB, CRUD OfflineFeature, thao tác tile-cache
     ├── tileCacheHelper.ts        # Protocol tile offline:// (cache-on-browse) + prefetch viewport + tile fallback
     ├── offlineSyncServer.ts      # "Server" chế độ Local: version CAS trên shared IndexedDB
-    └── syncTransport.ts          # Interface SyncTransport + LocalTransport (BroadcastChannel) + RemoteTransport (REST/WS)
+    ├── syncTransport.ts          # Interface SyncTransport + LocalTransport (BroadcastChannel) + RemoteTransport (REST/WS)
+    ├── osrmHelper.ts             # Route Optimizer: wrapper OSRM /table + /route, ma trận haversine fallback, gán mode
+    ├── routeApiHelper.ts         # Route Optimizer: sinh điểm giao hàng + polyline giả lập theo chặng (fallback)
+    └── playbackHelpers.ts        # History Playback: sinh khối không-thời gian + frame index O(1) + ProximityDetector (hash grid)
 
-server/                          # === Offline Sync chế độ "Backend" (Node độc lập, không bundle) ===
-├── index.js                     # Express + ws: /api/push, /api/pull, /api/simulate, WS /ws
-└── store.js                     # kho version + CAS + seq, lưu bền ra data.json
+server/                          # === Backend Node độc lập (không bundle): Offline Sync + IoT ngập lụt ===
+├── index.js                     # Express + ws: /api/push, /api/pull, /api/simulate; định tuyến WS /ws (sync) + /ws-sensors (IoT)
+├── store.js                     # Offline Sync: kho version + CAS + seq, lưu bền ra data.json
+└── sensorFeed.js                # Flood Twin: WebSocketServer /ws-sensors phát mực nước (~500ms)
 ```
 
 ## 6. Chạy dự án
@@ -418,7 +633,7 @@ Trên giao diện: bật **Real-time SSE Stream** để mô phỏng cập nhật
 ## 7. Hướng phát triển tiếp (production thật)
 
 - **Backend đẩy delta theo viewport** qua WebSocket/SSE (thay cho mô phỏng client-side) — chỉ gửi xe thay đổi, dùng `source.updateData()` (diff) thay cho `setData` toàn phần.
-- ETA dùng đường đi thực tế (routing/OSRM) thay cho khoảng cách đường chim bay × tốc độ trung bình.
+- ETA dùng đường đi thực tế (routing/OSRM) thay cho khoảng cách đường chim bay × tốc độ trung bình — đã hiện thực ở dashboard **Route Optimizer** (§12).
 - Lazy-load chunk `maplibre` nếu cần tối ưu thời gian tải lần đầu.
 
 ## 8. Module 3D Buildings
@@ -515,5 +730,154 @@ Cả 2 chế độ nằm sau interface `SyncTransport` ([`syncTransport.ts`](src
 - **`LocalTransport`** bọc server-IndexedDB-chung + `BroadcastChannel` (§11.1–11.5).
 - **`RemoteTransport`** nói chuyện với Node backend nhỏ trong [`server/`](server/) — **Express + `ws`**, version-CAS trong [`store.js`](server/store.js), lưu bền ra `server/data.json`. `push`/`pull` là `fetch("/api/...")`; thay đổi từ máy khác về qua **WebSocket** `/ws` (server broadcast `{type:"changed"}` sau mỗi ghi, client tự pull). [`vite.config.ts`](vite.config.ts) proxy `/api` + `/ws` sang `localhost:3001` (cùng origin, không CORS).
 - **Chạy:** `npm run server` (hoặc `npm run dev:all` để chạy kèm Vite), rồi chọn **Backend** trên panel. Lúc này Chrome, Firefox, tab ẩn danh, hay máy khác trong mạng đều sync chung một server, với **cùng** cơ chế conflict theo version. Backend chết → panel báo 🔴 và **tự fallback về Local**.
+- **WebSocket bền bỉ:** tự reconnect với backoff luỹ thừa (1s→2s→…→tối đa 32s, thử lại vô hạn tới khi transport bị đóng); khi **nối lại** sẽ `pull` ngay để bắt kịp các thay đổi đã lỡ lúc mất kết nối (idempotent nhờ con trỏ `seq`). Lúc mất kết nối, panel hiện 🔴.
 - **Đã kiểm chứng:** mở **2 trình duyệt khác nhau** ở chế độ Backend → vẽ/sửa ở bên này hiện sang bên kia theo thời gian thực (WebSocket → pull).
 - **Lưu ý:** chỉ chạy ở môi trường dev (dựa vào Vite proxy; production phải host server riêng). Local và Backend là **2 server tách biệt** (IndexedDB chung vs file JSON) — không tự migrate dữ liệu, nên chọn chế độ từ đầu.
+
+## 12. Module Route Optimizer (TSP / định tuyến giao hàng)
+
+Dashboard thứ sáu ([`src/components/RouteOptimizer/`](src/components/RouteOptimizer/)) giải **bài toán Người bán hàng (TSP)** cho 20 điểm giao hàng ngẫu nhiên quanh Hà Nội: tìm thứ tự đi qua sao cho tổng quãng đường ngắn nhất. Vẫn theo triết lý "worker giữ việc nặng + cầu nối imperative" — thuật toán chạy trong Web Worker, mọi hình học nằm trong `useRef`, chỉ kết quả cuối cùng đã sắp xếp mới vào React state.
+
+### 12.1. Định tuyến đường THẬT (OSRM), không phải đường chim bay
+Bản trước giả lập cả chi phí (haversine) lẫn đường vẽ (polyline bẻ cong sin) — nên lộ trình bỏ qua mạng đường thật. Giờ hai lời gọi OSRM (server demo công khai `router.project-osrm.org`, profile `driving`) làm nó thành thật:
+- **`/table`** trả ma trận N×N khoảng cách + thời gian **theo đường** trong vài ms (Contraction Hierarchies). Đây mới là thứ TSP tối ưu trên đó — không phải đường chim bay.
+- **`/route`** (`geometries=geojson`, `steps=true`) trả hình học đường chi tiết của thứ tự đã tối ưu trong **một** request; hình học từng chặng dựng lại bằng cách nối geometry các step trong leg.
+
+Cả hai gọi thẳng từ browser (không cần backend) và **fallback an toàn** — OSRM lỗi/bị rate-limit thì dashboard dựng lại ma trận haversine + polyline giả lập, đúng triết lý auto-fallback của dự án (Offline Sync → Local, tile → xám). Panel báo rõ đang dùng nguồn nào.
+
+> [`src/utils/osrmHelper.ts`](src/utils/osrmHelper.ts) · [`src/utils/routeApiHelper.ts`](src/utils/routeApiHelper.ts)
+
+### 12.2. Ba thuật toán TSP chạy nối tiếp (mỗi pha ≤ pha trước)
+Worker là **bộ giải ma trận thuần**: main thread đưa ma trận chi phí, worker không hề biết tọa độ.
+- **Nearest Neighbor** (tham lam, O(N²)): từ kho luôn nhảy tới điểm chưa thăm gần nhất. <1ms, ~25% trên tối ưu — dùng làm lời giải khởi đầu.
+- **2-opt** (local search, O(N²)/lượt): gỡ cạnh cắt chéo bằng cách đảo đoạn giữa hai cạnh; nhận swap khi `D(a,c)+D(b,d) − D(a,b) − D(c,d) < 0`. Vài ms, ~2–5% trên tối ưu (cực tiểu *cục bộ*).
+- **Held-Karp** (quy hoạch động, O(N²·2ᴺ)) khi N ≤ 20: `dp[mask][j]` = chi phí nhỏ nhất xuất phát từ kho, thăm đúng tập `mask`, kết tại `j`. **Tối ưu tuyệt đối**. Ở N=20 bảng là `Float32Array` ~84MB, chạy ~1–2s — chấp nhận được trong worker (ngoài luồng UI). N>20 thì bỏ qua, giữ kết quả 2-opt.
+
+Nên `nnKm ≥ twoOptKm ≥ exactKm`, hiển thị thành chuỗi cải thiện trên panel kèm badge "✓ tối ưu tuyệt đối". Vì Held-Karp giải được tối ưu ở N=20 nên Genetic Algorithm không cần thiết ở quy mô này (chỉ đáng giá khi N lớn hơn hoặc có thêm ràng buộc → VRP).
+
+> [`src/workers/tspSolver.worker.ts`](src/workers/tspSolver.worker.ts)
+
+### 12.3. Render đa phương thức + overlay so sánh NN
+Route source là `FeatureCollection` các `LineString` theo chặng, mỗi cái gắn `mode`. Phải dùng hai line layer vì **`line-dasharray` không data-driven trong MapLibre** — không đổi nét đứt/liền per-feature bằng expression. Nên một layer nét liền xanh lá (`mode == "ride"`, xe máy) và một layer nét đứt xanh dương (`mode == "walk"`, chặng ngắn "vào ngõ") lọc theo property. (OSRM demo chỉ có profile ô tô nên phân loại mode mang tính **minh hoạ** — hình học luôn là đường xe.)
+
+Tích **"chồng lộ trình Nearest Neighbor"** vẽ lộ trình NN thô bằng **đường thẳng** nét đứt đỏ nối các điểm theo thứ tự NN. Thẳng (không bám phố) là cố ý: 2-opt/Held-Karp sinh ra để tháo các cạnh *cắt chéo*, và nét thẳng làm chỗ chéo đó lộ rõ so với lộ trình tối ưu phía dưới.
+
+> [`src/components/RouteOptimizer/MapContainerTsp.tsx`](src/components/RouteOptimizer/MapContainerTsp.tsx) · [`ControlPanelTsp.tsx`](src/components/RouteOptimizer/ControlPanelTsp.tsx) · [`index.tsx`](src/components/RouteOptimizer/index.tsx)
+
+Luồng: **`/table` → Worker(matrix) → `/route` → vẽ**. Orchestrator giữ ma trận, hình học leg và coords overlay NN trong ref; chỉ danh sách thứ tự cuối + tổng quãng đường/thời gian vào React state.
+
+## 13. Module Geofence Monitor (giám sát vùng cấm quy mô lớn)
+
+Dashboard thứ bảy ([`src/components/Geofencing/`](src/components/Geofencing/)) giám sát **50.000 xe** di chuyển trên **toàn Việt Nam** và phát cảnh báo tức thì mỗi khi một xe **đi VÀO** hoặc **ĐI RA** khỏi một trong **1.000 vùng cấm hình thù bất kỳ (polygon)**. Worker giữ toàn bộ dữ liệu và chạy trọn pipeline phát hiện; main thread chỉ render subset trong viewport bằng layer circle GPU.
+
+### 13.1. Vì sao cách ngây thơ bùng nổ — và spatial grid để khắc phục
+Cách hiển nhiên — mỗi tick kiểm tra mọi xe với mọi polygon — là `50.000 × 1.000 = 50.000.000` phép point-in-polygon mỗi tick → làm chảy worker. Giải pháp là **pipeline lọc 3 lớp** ([`geofence.worker.ts`](src/workers/geofence.worker.ts), [`geofenceHelpers.ts`](src/utils/geofenceHelpers.ts)):
+
+- **Lớp 0 — Spatial grid index.** `buildSpatialGrid` phủ lưới đều (ô ~0.3°) lên bbox cả nước và băm mỗi polygon vào **mọi ô mà bbox của nó chạm tới**. Lúc truy vấn, một xe rơi vào đúng **một** ô và chỉ xét vài polygon đăng ký trong ô đó → độ phức tạp tụt từ `O(xe × tổng_vùng)` xuống `O(xe × vùng/ô)`. **Đây là thay đổi khiến mở rộng diện tích chạy được.**
+- **Lớp 1 — Bounding box (đại số).** Mỗi polygon ứng viên qua phép kiểm tra rẻ `xmin ≤ x ≤ xmax && ymin ≤ y ≤ ymax` (`zoneBboxFlat` tính sẵn). Vẫn cần vì bbox của polygon có thể tràn sang ô lưới bên cạnh.
+- **Lớp 2 — Turf `booleanPointInPolygon`.** Chỉ những xe sống sót qua Lớp 0+1 mới chạm phép kiểm tra hình học chính xác ([Turf.js](https://turfjs.org/)); tọa độ truyền dạng mảng thô `[lng, lat]` (không cấp phát object mỗi lần gọi).
+
+### 13.2. Cache trạng thái — cảnh báo theo *chuyển đổi*, không theo *điều kiện*
+Một typed array thô `Int16Array zoneOf` (mỗi xe một ô, giá trị = id vùng hiện tại, `-1` = ngoài mọi vùng) là **cache trạng thái trước đó** — cố ý **không** dùng React state. Mỗi tick worker so vùng vừa tính với `zoneOf[i]`: **Enter** chỉ phát khi `ngoài → trong`, **Exit** chỉ phát khi `trong → ngoài`. Một xe nằm im *bên trong* vùng suốt nghìn tick sinh ra **0** cảnh báo lặp. Cờ `primed` biến tick 0 thành baseline im lặng để xe spawn sẵn trong vùng không phát "enter" giả.
+
+### 13.3. Render, gom cụm chuyển động, và điều khiển tốc độ
+Xe được spawn theo **cụm quanh 12 anchor đô thị** (trọng số theo quy mô) và mỗi xe lượn trong bán kính `ROAM_RADIUS` quanh "nhà" của nó, nên đội xe bám đất liền và liên tục cắt qua các vùng (thay vì trôi đều ra biển). Chúng render bằng **layer `circle` GPU** với **màu data-driven** — `["case", ["==", ["get","v"], 1], đỏ, xanh]` — nên xe vi phạm hóa đỏ mà không cần JS per-feature. Kênh render tái dùng **two-pass count-then-pack** lọc theo viewport + transferable của dự án, cộng cờ `Uint8Array violating`. Một **thanh trượt tốc độ** gửi `SET_SPEED { factor }` để chỉnh tốc độ live (kéo về **0** để đóng băng — phát hiện vẫn chạy nhưng không có chuyển trạng thái mới). Khi load, map `fitBounds` về bbox cả nước.
+
+### 13.4. Ý nghĩa các chỉ số trên panel
+Panel điều khiển ([`ControlPanelGeofence.tsx`](src/components/Geofencing/ControlPanelGeofence.tsx)) hiển thị:
+
+| Chỉ số | Ý nghĩa |
+|--------|---------|
+| **Xe đang vi phạm** | Số **tức thời** xe hiện đang nằm trong một vùng bất kỳ (`zoneOf[i] !== -1`), trên *toàn* đội xe — không chỉ viewport. Lên xuống liên tục. |
+| **Xe trong viewport** | Bao nhiêu xe rơi vào khung nhìn hiện tại — tức bao nhiêu chấm thực sự được vẽ tick này (subset render đã lọc bbox). |
+| **Tổng lượt VÀO (Enter)** | **Tổng cộng dồn** (chỉ tăng) số lần chuyển `ngoài → trong` từ lúc bắt đầu giám sát. Là bộ đếm *lưu lượng* — bao nhiêu lần vượt biên vào vùng, không phải bao nhiêu xe đang ở trong. |
+| **Tổng lượt RA (Exit)** | Tương tự, cho chuyển `trong → ngoài`. Bám sát Enter theo thời gian (mỗi lần vào rồi sẽ ra); Enter thường nhỉnh hơn chút vì còn xe đang kẹt bên trong. |
+| **Turf PiP checks/tick** | Số lần gọi `booleanPointInPolygon` trong **tick gần nhất** — tức bao nhiêu xe sống sót qua Lớp 0+1 và cần kiểm tra chính xác. Đây là **bằng chứng hiệu năng**: thường chỉ vài nghìn, so với 50.000.000 nếu quét brute-force. Dao động theo từng tick tùy số xe đang lảng vảng gần vùng. |
+| **Simulation ticks** | Số tick worker đã chạy. Mỗi tick **250 ms** (4 Hz), nên `ticks × 0,25 s` ≈ thời gian giám sát đã trôi. Ngừng tăng nếu tạm dừng giám sát. |
+| Tiêu đề **Cảnh báo trực tiếp** | `(N sự kiện · xem 80 gần nhất)` — `N` là tổng thật (`Enter + Exit`); danh sách cuộn bị giới hạn **80 dòng mới nhất** để panel nhẹ. Việc độ dài danh sách đứng yên ở 80 là do cap, không phải số sự kiện. |
+
+Hợp đồng message: main→worker `INIT_DATA { count, geofenceCount, bbox }`, `UPDATE_BBOX { bbox }`, `SET_STREAMING { isActive }`, `SET_INTERACTING { isActive }`, `SET_SPEED { factor }`; worker→main `GEOFENCES_READY { geojson }` (polygon, gửi 1 lần), `DATA_UPDATED { count, coords, violating, idx, totalViolating, pipCount, alerts }` (typed array transferable; `alerts` = chỉ các chuyển đổi), và `ALERTS_ONLY { alerts, totalViolating, pipCount }` (phát **trong lúc** pan/zoom nên giám sát không bao giờ dừng). Phát hiện chạy trên toàn bộ xe bất kể viewport; chỉ kênh render mới lọc theo bbox.
+
+## 14. Module History Playback (tua lại chuỗi thời gian + phát hiện va chạm)
+
+Dashboard thứ tám ([`src/components/HistoryPlayback/`](src/components/HistoryPlayback/)) rời chủ đề streaming real-time để giải bài toán **tua lại lịch sử**: kéo tới/lui qua lịch sử di chuyển đã ghi của **5.000 xe** trong cửa sổ **300 giây**, đồng thời tự động phát hiện mọi cặp xe từng **lại gần nhau dưới 5 m** (nguy cơ va chạm) tại bất kỳ thời điểm nào. Việc sinh dữ liệu nặng chạy trong worker; phần tua + phát hiện chạy ở main thread 60fps.
+
+### 14.1. Cấu trúc dữ liệu Không-Thời gian (tối ưu RAM, truy xuất O(1))
+Cách ngây thơ `Vehicle[][]` (mỗi giây một mảng object) sẽ là **hàng triệu object** — phình RAM và GC liên tục. Thay vào đó toàn bộ lịch sử là **một `Float32Array` phẳng — "khối không-thời gian"** ([`playbackHelpers.ts`](src/utils/playbackHelpers.ts)) bố trí `[frame][xe][lng,lat]` với `offset(t,i) = t*stride + i*2` (`stride = count*2`):
+- id của xe **chính là** index mảng `i` (ổn định qua mọi frame) → không cần lưu id;
+- frame của giây `t` là một **view `subarray` zero-copy** trỏ vào cùng buffer, nên `Map<timestamp, frame>` yêu cầu ([`buildFrameIndex`](src/utils/playbackHelpers.ts)) cho truy xuất **O(1)** mà **không cấp phát thêm**;
+- dung lượng: 5k × 301 × 2 × 4 B ≈ **12 MB** cho cả lịch sử, sinh **một lần** trong [`playbackHistory.worker.ts`](src/workers/playbackHistory.worker.ts) và **transfer zero-copy** (không structured-clone).
+
+Mỗi xe được sinh như một quỹ đạo "giao thông" (hướng + tốc độ, bẻ lái nhẹ mỗi giây, dội lại khi chạm biên vùng) trong một khu phố gọn ~3,5 km × 2,8 km để mật độ đủ cao → các cặp xe thực sự có lúc đi qua nhau trong 5 m — pha lại gần là **tự phát**, không dàn dựng.
+
+### 14.2. Bộ điều khiển tua (nội suy RAF 60fps)
+Timeline chạy 0→300 s. Vòng lặp `requestAnimationFrame` ([`MapContainerPlayback.tsx`](src/components/HistoryPlayback/MapContainerPlayback.tsx)) tiến `time += dt × speed` và **nội suy tuyến tính** mỗi xe giữa hai mốc giây liền kề, đẩy vào MapLibre bằng `source.setData()` — nên chuyển động luôn mượt 60fps bất kể tốc độ tua (1×–60×). Slider hai chiều: vòng RAF publish thời gian hiện tại về React **throttle** (~16 Hz) nên dashboard không re-render mỗi frame; kéo slider dùng **token `seekNonce`** để cập nhật từ RAF không gây vòng lặp seek (pattern ref-for-prop của dự án). Xe render bằng layer `circle` GPU với **màu data-driven** — đỏ khi đang trong pha va chạm gần, xanh lơ khi an toàn — qua object pool (không cấp phát mỗi frame).
+
+### 14.3. Phát hiện va chạm — spatial hash grid (không O(N²))
+So mọi cặp là `5000 × 4999 / 2 ≈ 12,5 triệu` phép **mỗi frame** — bất khả thi ở 60fps. [`ProximityDetector`](src/utils/playbackHelpers.ts) thay bằng cách băm xe vào **lưới đều có cạnh ô = ngưỡng 5 m**: hai xe chỉ có thể trong 5 m nếu cùng ô hoặc ô kề, nên mỗi xe chỉ so với **9 ô xung quanh** (và chỉ `j > i` để khỏi đếm 2 lần). Tụt về ~O(N) khi mật độ đều. Mảng bucket tái dùng qua free-list và `cellIdx` mỗi xe được tái dùng, nên sau warm-up bộ dò **gần như không cấp phát mỗi frame**. Bộ dò chạy **mỗi frame trên vị trí đã nội suy**, nên vòng cảnh báo bám đúng những gì đang vẽ. Một pha va chạm chỉ được ghi log khi cặp xe **mới** lại gần (một chuyển đổi, như cache Enter của geofence) để danh sách không tràn; mỗi hit còn vẽ một vòng **halo hổ phách + lõi đỏ** tại trung điểm cặp xe.
+
+### 14.4. Thước đo (đo khoảng cách khi Pause)
+Bật **📏 Thước đo** sẽ tạm dừng playback (để xe đứng yên cho đo chính xác) và biến cú click thành thao tác đo: bấm 2 xe để vẽ đường đứt nét vàng nối chúng (điểm A lime, điểm B cam) kèm nhãn khoảng cách live (`haversine`, hiện m hoặc km) cả trên bản đồ lẫn trên panel. Bấm xe thứ 3 bắt đầu cặp mới. Đường đo cũng tự vẽ lại khi kéo slider, nên có thể so khoảng cách của cùng cặp xe ở các thời điểm khác nhau. (Cặp đang chọn giữ trong ref; lúc đang phát không có gì per-frame chạm React state.)
+
+### 14.5. Ý nghĩa các chỉ số trên panel
+Panel điều khiển ([`ControlPanelPlayback.tsx`](src/components/HistoryPlayback/ControlPanelPlayback.tsx)) hiển thị (rê chuột vào ⓘ để xem tooltip tại chỗ):
+
+| Giá trị | Ý nghĩa |
+|---------|---------|
+| **Timeline `mm:ss / mm:ss`** + **tốc độ (1×–60×)** | Vị trí hiện tại trong cửa sổ 300 s / tổng. Tốc độ = số **giây lịch sử** phát mỗi **giây thực** (10× ⇒ toàn bộ 300 s xem hết trong 30 s). Kéo slider nhảy tới bất kỳ giây nào với **O(1)** (view zero-copy vào cube). |
+| **Cặp đang va chạm gần** | Số **tức thời** các cặp xe hiện cách nhau dưới 5 m **tại đúng khung hình đang xem**. Lên/xuống khi tua; `0` nghĩa là khoảnh khắc đó không có nguy cơ va chạm. |
+| **Tổng sự kiện đã ghi** | **Tổng cộng dồn** (chỉ tăng) số lần một cặp **mới** lại gần dưới ngưỡng — đếm ở *thời điểm bắt đầu* lại gần, không đếm lại mỗi frame cặp vẫn đang gần. Chỉ tăng khi đang phát; tua tay không sinh sự kiện. |
+| **Phép so cặp / frame** | Số phép so khoảng cách spatial grid **thực sự** chạy ở frame này (chỉ các xe cùng ô hoặc ô kề). Đây là **bằng chứng hiệu năng**: thường vài nghìn so với ~12,5 triệu nếu quét O(N²). |
+| **FPS** | Tốc độ khung hình thực đo của vòng RAF (publish ~2 Hz). Mục tiêu 60 — đo cả nội suy **+** dò va chạm mỗi frame **+** `setData`, gộp lại. |
+| **Thời gian dựng cube** | Thời gian Worker mất để sinh toàn bộ khối không-thời gian (5.000 × 301 frame) **một lần** lúc mở, trước khi transfer zero-copy. Sau đó việc tua không tốn thêm chi phí sinh dữ liệu. |
+| Ô **Spatial grid** | Nhắc lại *phép so cặp/frame* đối chiếu với con số brute-force `N²/2` — tỉ lệ hiệu quả live của lưới. |
+| Ô **Thước đo** | Khi bật thước đo: 2 xe đang chọn + khoảng cách (m/km). Chỉ hiện khi đang tạm dừng. |
+
+Hợp đồng message: main→worker `GENERATE { count, frames }`; worker→main `GENERATED { cube, count, frames, stride, genMs }` (`ArrayBuffer` của `cube` là **transferable**). Khác mọi worker khác, worker này **không trạng thái, chạy một lần** — không `setInterval`, không bbox, không fetch: sinh cube một lần rồi main thread tự lo việc tua + phát hiện (gần với tinh thần xử-lý-trên-main-thread của Offline Sync, nhưng có worker cho bước sinh dữ liệu nặng).
+
+## 15. Module 3D Flood Digital Twin (custom WebGL shader + DEM + 3D Tiles)
+
+Dashboard thứ chín ([`src/components/FloodSim/`](src/components/FloodSim/)) là một **bản sao số (digital twin)** ngập lụt: thành phố 3D có đường phố và chân các toà nhà bị nước dâng nhấn chìm, mực nước điều khiển real-time từ cảm biến IoT. Khác mọi dashboard khác, nó đi **xuống dưới style API của MapLibre tới GLSL thô**, qua hai layer `CustomLayerInterface` dùng chung GL context của bản đồ.
+
+### 15.1. Shader nước tuỳ biến (điểm nhấn)
+[`FloodWaterLayer`](src/utils/floodLayers.ts) là một **mặt phẳng trong suốt** giữ ở cao độ `u_levelZ` (mét → mercator). Hiệu ứng sóng làm **hoàn toàn trong fragment shader** (tổng các hàm sin + vệt phản quang), tính theo **toạ độ MÉT thật** (`v_local = (a_pos − u_origin) / u_meter`) nên bước sóng cố định trong không gian thật, nhìn **giống nhau ở mọi zoom**. Tấm nước là một quad lớn phủ kín tầm nhìn; vẽ sau cùng với `depthMask(false)` + alpha blend để đọc depth của nhà/địa hình và nhấn chìm mọi thứ thấp hơn mực nước, kèm `gl.POLYGON_OFFSET_FILL(0, −4)` (**chỉ bias hằng số**, factor = 0) để thắng z-fighting với mặt đất ở xa mà không leo đè lên tường khi nhìn nghiêng. Nhà để **đục hoàn toàn** cho depth sạch.
+
+### 15.2. Slider bỏ qua React (điều khiển trực tiếp uniform)
+Mực nước nằm trong một **đối tượng dùng chung** `useRef<{ meters }>` được trao cho cả hai layer WebGL lúc khởi tạo. `onChange` của `<input type=range>` (uncontrolled) **mutate `waterRef.current.meters`** + cập nhật thumb/nhãn qua **DOM ref** — không qua React state — nên kéo slider bơm thẳng giá trị vào uniform GPU **mà không re-render bản đồ**. Lũ thật 0–5 m so với nhà cao 100 m chỉ là lớp màng mỏng, nên cao độ mặt nước (và mốc so chìm của props) được nhân `FLOOD_VIS_SCALE` (×4, **phóng đại trực quan** — slider vẫn là mét thật).
+
+### 15.3. Instanced Rendering (cây + rào chắn cứu hộ)
+[`InstancedPropsLayer`](src/utils/floodLayers.ts) vẽ hàng nghìn cây (thân hộp + 2 nón) và rào (hộp + dải phản quang) bằng **`drawArraysInstanced`** (WebGL2) / `ANGLE_instanced_arrays` (fallback WebGL1): 1 base-mesh VBO dùng chung + 1 VBO theo-instance nhỏ (`[mercX, mercY, scale, rot]`, 16 B/instance) → VRAM phẳng bất kể số lượng. Phần vật thể dưới mực nước bị nhuộm xanh ("chìm").
+
+### 15.4. Ba nguồn cảnh (toggle trên panel)
+- **🏙️ Synthetic** — nhà (`fill-extrusion`) + props instanced sinh một lần trong [`floodSim.worker.ts`](src/workers/floodSim.worker.ts).
+- **🗼 MapTiler** — nhà 3D **thật** từ vector **OpenMapTiles** của MapTiler bằng `fill-extrusion` native trên lớp `building` (`render_height`/`render_min_height`) — *không* dùng deck.gl/3D-Tiles (`v3-openmaptiles/tiles.json` là vector tileset). Cần key MapTiler; key **giới hạn theo origin** nên 403 nghĩa là origin chưa được allowlist tại cloud.maptiler.com.
+- **🌍 Google** — **OGC Photorealistic 3D Tiles** qua deck.gl `Tile3DLayer` + `@deck.gl/mapbox` `MapboxOverlay({ interleaved: true })` ([`google3dTiles.ts`](src/utils/google3dTiles.ts)), dùng chung depth buffer nên nước vẫn ngập theo cao độ thật. Cần **bật Map Tiles API** trên project Google Cloud nếu không tileset sẽ 403. deck.gl + loaders.gl tách chunk vendor `deckgl` (lazy).
+
+Cả hai nguồn thật đều ẩn nhà/props giả lập. Key override qua `VITE_MAPTILER_KEY` / `VITE_GOOGLE_3D_TILES_KEY`.
+
+### 15.5. Địa hình DEM + feed IoT qua WebSocket
+- **DEM** — source `raster-dem` Terrarium (công khai, không cần key) + `map.setTerrain` để lũ ngập theo cao độ địa hình thật; áp dụng cho **Synthetic & MapTiler** (Google tự có địa hình).
+- **Feed IoT** — ở chế độ "📡 Cảm biến IoT", một WebSocket ([`floodSensorFeed.ts`](src/utils/floodSensorFeed.ts) → `/ws-sensors`, phục vụ bởi [`server/sensorFeed.js`](server/sensorFeed.js)) bắn mực nước mỗi ~500 ms vào cùng đường uniform; tự reconnect backoff và **tự fallback sang simulator phía client** khi không có backend (để `npm run dev` vẫn chạy). Path `/ws-sensors` **riêng** (WebSocketServer riêng) để không đụng `/ws` của Offline Sync.
+
+### 15.6. Ý nghĩa các giá trị trên panel
+Panel điều khiển ([`ControlPanelFlood.tsx`](src/components/FloodSim/ControlPanelFlood.tsx)):
+
+| Điều khiển / giá trị | Ý nghĩa |
+|----------------------|---------|
+| **Nguồn cảnh 3D** — 🏙️ Synthetic / 🗼 MapTiler / 🌍 Google | Chọn cái dựng thành phố 3D: khối hộp giả lập, nhà vector thật của MapTiler, hay 3D Tiles photorealistic của Google (§15.4). Chuyển nguồn sẽ ẩn/hiện các layer tương ứng. |
+| **Địa hình DEM thật** (checkbox, Synthetic/MapTiler) | Bật/tắt địa hình thật (`raster-dem`); khi bật, mép nước ngập theo cao độ mặt đất thay vì nền phẳng z=0. |
+| **Phóng đại** ×N (terrain) | Hệ số phóng đại chiều cao của lưới địa hình DEM (Hà Nội phẳng nên cần phóng đại mới thấy rõ). Thuần hiển thị. |
+| **Chip trạng thái 3D Tiles** (Google) | `Sẵn sàng` → `Đang tải…` → `đã tải` / `Lỗi tải tiles` (thường do chưa bật Map Tiles API). |
+| **Bản đồ nền** — 🌑 Tối / ☀️ Sáng / 🗺️ Voyager | Đổi style nền Carto (tối / sáng / đường phố). Gọi `map.setStyle()`, sau đó mọi custom layer/terrain/overlay được dựng lại tự động. |
+| **Nguồn mực nước** — 📡 IoT / ✋ Thủ công | IoT = feed cảm biến WebSocket điều khiển mực nước (slider chỉ đọc); Thủ công = bạn tự kéo slider + chạy kịch bản bão. |
+| **Chip trạng thái feed** (chế độ IoT) | `LIVE` (xanh, cảm biến thật) / `SIMULATED` (cam, không có backend → simulator client) / `CONNECTING`, kèm mã trạm. |
+| **Mức độ ngập lụt: X.X m** + slider (0–5 m) | Mực nước theo **mét thật** — bơm thẳng vào uniform `u_water_level` của GPU (không re-render React). Cao độ vẽ ×4 (phóng đại trực quan) để thấy rõ nước dâng; con số là mét thật. |
+| **🌊 Mô phỏng bão về (0 → 5m)** | Kịch bản "bão": dâng mực nước từ tốn 0→5 m (chỉ ở chế độ Thủ công). |
+| **Toà nhà (fill-extrusion)** | Số toà nhà giả lập trong cảnh (số feature GeoJSON sinh ra). |
+| **Cây xanh (instanced)** | Số instance cây do layer instanced vẽ (1 mesh dùng chung). |
+| **Rào chắn (instanced)** | Số instance rào chắn cứu hộ do layer instanced vẽ. |
+| **Worker sinh cảnh** | Thời gian (ms) worker mất để sinh toàn bộ cảnh giả lập **một lần** (JSON nhà + mảng props), trước khi transfer. |
+| **Tổng vật thể props** | cây + rào — tổng số instance đẩy lên GPU từ **một** lần nạp mesh (con số minh hoạ "instancing"). |
+| **↻ Sinh lại bản sao số đô thị** | Sinh lại cảnh giả lập (nhà/props ngẫu nhiên mới). |
+
+Hợp đồng message: **IoT** server→client trên path **riêng** `/ws-sensors` — `{ type:"sensor", stationId, level, ts }` mỗi ~500 ms (`level` 0–5 m). **Worker sinh cảnh** ([`floodSim.worker.ts`](src/workers/floodSim.worker.ts)) main→worker `GENERATE { buildingCount, treeCount, barrierCount }`; worker→main `SCENE_READY { buildings, trees, barriers, genMs }` (`buildings` structured-clone, `trees`/`barriers` transferable). Phân tích kiến trúc chuyên sâu (đánh đổi 3D Tiles/HLOD, DEM, instancing quy mô lớn) nằm ở [`docs/flood-architecture.md`](docs/flood-architecture.md).

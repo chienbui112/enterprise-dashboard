@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# Env files (chứa API key) — chỉ commit .env.example
+.env
+.env.*
+!.env.example
+
 # Offline Sync backend persistence
 server/data.json
 

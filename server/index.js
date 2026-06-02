@@ -7,6 +7,7 @@ import cors from "cors";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { push, pullSince, simulate, currentSeq } from "./store.js";
+import { createSensorWss } from "./sensorFeed.js";
 
 const PORT = 3001;
 
@@ -15,7 +16,27 @@ app.use(cors()); // không cần khi đi qua Vite proxy, nhưng bật để gọ
 app.use(express.json({ limit: "2mb" }));
 
 const httpServer = createServer(app);
-const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+
+// Hai WebSocketServer ở chế độ noServer; tự định tuyến "upgrade" theo path (cách chuẩn khi
+// nhiều WSS dùng chung 1 HTTP server). "/ws" = Offline Sync; "/ws-sensors" = cảm biến IoT.
+const wss = new WebSocketServer({ noServer: true });
+const sensorWss = createSensorWss();
+
+httpServer.on("upgrade", (req, socket, head) => {
+  let pathname = "/";
+  try {
+    pathname = new URL(req.url, "http://localhost").pathname;
+  } catch {
+    /* giữ "/" */
+  }
+  if (pathname === "/ws") {
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+  } else if (pathname === "/ws-sensors") {
+    sensorWss.handleUpgrade(req, socket, head, (ws) => sensorWss.emit("connection", ws, req));
+  } else {
+    socket.destroy();
+  }
+});
 
 // Báo mọi client (qua WebSocket) rằng server vừa có thay đổi -> client tự gọi /api/pull.
 const broadcast = () => {
@@ -49,5 +70,5 @@ wss.on("connection", () => {
 });
 
 httpServer.listen(PORT, () => {
-  console.log(`[server] Offline Sync backend listening on :${PORT} (REST /api/*, WS /ws)`);
+  console.log(`[server] Backend listening on :${PORT} (REST /api/*, WS /ws, IoT WS /ws-sensors)`);
 });

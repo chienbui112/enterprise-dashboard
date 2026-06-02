@@ -79,6 +79,19 @@ export const DASHBOARDS: DashboardDef[] = [
     ),
   },
   {
+    id: "playback",
+    label: "History Playback",
+    desc: "Tua lại 5k xe × 300s · cube không-thời gian + dò va chạm < 5m bằng spatial grid",
+    icon: "⏮️",
+    accent: "#a78bfa",
+    category: "fleet",
+    path: "/history-playback",
+    badges: ["5k × 300s", "Space-time cube", "Proximity grid"],
+    component: lazy(() =>
+      import("../components/HistoryPlayback").then((m) => ({ default: m.HistoryPlaybackDashboard })),
+    ),
+  },
+  {
     id: "bigdata",
     label: "Big Data Geo-Engine",
     desc: "1M points · GPU heatmap + Supercluster auto-zoom",
@@ -89,6 +102,32 @@ export const DASHBOARDS: DashboardDef[] = [
     badges: ["1M points", "GPU", "Supercluster"],
     component: lazy(() =>
       import("../components/BigDataSpatial").then((m) => ({ default: m.BigDataDashboard })),
+    ),
+  },
+  {
+    id: "tsp",
+    label: "Route Optimizer",
+    desc: "TSP 20 điểm · OSRM đường thật + Held-Karp trong Worker + render đa phương thức",
+    icon: "🧭",
+    accent: "#818cf8",
+    category: "spatial",
+    path: "/route-optimizer",
+    badges: ["OSRM", "Held-Karp", "Multi-modal"],
+    component: lazy(() =>
+      import("../components/RouteOptimizer").then((m) => ({ default: m.RouteOptimizerDashboard })),
+    ),
+  },
+  {
+    id: "geofence",
+    label: "Geofence Monitor",
+    desc: "Toàn VN · 50k xe · 1000 vùng cấm · spatial grid + lọc 2 tầng (bbox + Turf PiP) trong Worker",
+    icon: "🚧",
+    accent: "#f87171",
+    category: "spatial",
+    path: "/geofencing",
+    badges: ["50k", "Grid index", "Turf PiP"],
+    component: lazy(() =>
+      import("../components/Geofencing").then((m) => ({ default: m.GeofencingDashboard })),
     ),
   },
   {
@@ -117,6 +156,19 @@ export const DASHBOARDS: DashboardDef[] = [
     badges: ["100k", "fill-extrusion", "GPU"],
     component: lazy(() =>
       import("../components/MapDashboard3d").then((m) => ({ default: m.MapDashboard3d })),
+    ),
+  },
+  {
+    id: "flood",
+    label: "3D Digital Twin · Ngập lụt",
+    desc: "Custom WebGL Shader mô phỏng nước dâng lên toà nhà 3D + Instanced trees/barriers",
+    icon: "🌊",
+    accent: "#0ea5e9",
+    category: "spatial",
+    path: "/flood-twin",
+    badges: ["WebGL Shader", "Instanced", "60 FPS"],
+    component: lazy(() =>
+      import("../components/FloodSim").then((m) => ({ default: m.FloodSimDashboard })),
     ),
   },
   {
