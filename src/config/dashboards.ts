@@ -172,6 +172,19 @@ export const DASHBOARDS: DashboardDef[] = [
     ),
   },
   {
+    id: "cesium-flood",
+    label: "Cesium Digital Twin · Ngập lụt",
+    desc: "CesiumJS · khối nước thể tích thực + CallbackProperty 60fps + IDW từ 50 cảm biến IoT",
+    icon: "🌐",
+    accent: "#0891b2",
+    category: "spatial",
+    path: "/cesium-flood-twin",
+    badges: ["CesiumJS", "3D Tiles", "IoT WebSocket"],
+    component: lazy(() =>
+      import("../components/CesiumFloodTwin").then((m) => ({ default: m.CesiumFloodTwinDashboard })),
+    ),
+  },
+  {
     id: "offline",
     label: "Offline Sync",
     desc: "IndexedDB + queue sync + conflict resolution version-based",

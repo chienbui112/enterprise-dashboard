@@ -1,12 +1,16 @@
 import { defineConfig } from 'vite'
 import react, { reactCompilerPreset } from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
+// vite-plugin-cesium: tự set window.CESIUM_BASE_URL, copy static assets (Workers/Assets/ThirdParty)
+// và inject Widgets/widgets.css — bắt buộc để CesiumJS chạy được dưới Vite.
+import cesium from 'vite-plugin-cesium'
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
     react(),
-    babel({ presets: [reactCompilerPreset()] })
+    babel({ presets: [reactCompilerPreset()] }),
+    cesium()
   ],
   // Proxy REST + WebSocket sang backend Offline Sync (npm run server, cổng 3001) -> cùng origin, tránh CORS.
   server: {

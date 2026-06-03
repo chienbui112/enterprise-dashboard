@@ -19,6 +19,8 @@
     "@loaders.gl/core": "^4.4.2",
     "@loaders.gl/tiles": "^4.4.2",
     "@turf/turf": "^7.3.5",
+    "cesium": "^1.142.0",
+    "cesium-navigation-es6": "^3.0.9",
     "geokdbush": "^2.1.0",
     "idb": "^8.0.3",
     "kdbush": "^4.1.0",
@@ -26,7 +28,8 @@
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-router-dom": "^7.16.0",
-    "supercluster": "^8.0.1"
+    "supercluster": "^8.0.1",
+    "vite-plugin-cesium": "^1.2.23"
   },
   "devDependencies": {
     "@babel/core": "^7.29.0",
